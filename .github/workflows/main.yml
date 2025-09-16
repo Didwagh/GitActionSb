@@ -2,7 +2,7 @@ name: Deploy Spring Boot Gradle to Pinggy
 on: 
   push:
     branches: [ main, master ]
-  workflow_dispatch: # Allow manual trigger
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -36,20 +36,12 @@ jobs:
           
           if [ ! -f "build.gradle" ]; then
             echo "❌ No build.gradle found in root directory"
-            echo "Please ensure your Spring Boot project is in the repository root"
             exit 1
           fi
           
-          echo "✅ build.gradle found, checking if it's a Spring Boot project..."
-          if grep -q "spring-boot" build.gradle; then
-            echo "✅ Spring Boot dependencies found"
-          else
-            echo "⚠️  Warning: No Spring Boot dependencies detected in build.gradle"
-          fi
-          
-          echo "📁 Source structure:"
+          echo "✅ build.gradle found"
           find src -type f -name "*.java" | head -10
-      
+          
       - name: Make gradlew executable
         run: chmod +x ./gradlew
       
@@ -57,128 +49,92 @@ jobs:
         run: |
           echo "🏗️ Building Spring Boot application..."
           ./gradlew clean build -x test --no-daemon
-          
-          echo "📦 Checking build output..."
           ls -la build/libs/
-          
-          if ls build/libs/*.jar 1> /dev/null 2>&1; then
-            echo "✅ JAR file built successfully:"
-            ls -la build/libs/*.jar
-          else
-            echo "❌ No JAR file found in build/libs directory"
+          if ! ls build/libs/*.jar 1> /dev/null 2>&1; then
+            echo "❌ No JAR file found"
             exit 1
           fi
       
       - name: Start Spring Boot application
         run: |
           echo "🚀 Starting Spring Boot application..."
-          
-          # Find the JAR file (exclude plain JARs)
           JAR_FILE=$(find build/libs -name "*.jar" -not -name "*-plain.jar" | head -1)
-          
           if [ -z "$JAR_FILE" ]; then
             echo "❌ No executable JAR found"
-            echo "Available files in build/libs:"
             ls -la build/libs/
             exit 1
           fi
-          
           echo "📦 Starting JAR: $JAR_FILE"
-          
-          # Start the application in background
           nohup java -jar "$JAR_FILE" > app.log 2>&1 &
           APP_PID=$!
-          echo "🆔 Application PID: $APP_PID"
           echo $APP_PID > app.pid
-          
-          # Wait for application to start
-          echo "⏳ Waiting for application to start..."
+          echo "🆔 App PID: $APP_PID"
+          # wait for app
           for i in {1..60}; do
-            if curl -s http://localhost:8080/actuator/health > /dev/null 2>&1; then
-              echo "✅ Application health check passed"
+            if curl -s http://localhost:8080/actuator/health > /dev/null 2>&1 || curl -s http://localhost:8080 > /dev/null 2>&1; then
+              echo "✅ App responding"
               break
-            elif curl -s http://localhost:8080 > /dev/null 2>&1; then
-              echo "✅ Application is responding"
-              break
-            else
-              if [ $i -eq 60 ]; then
-                echo "❌ Application failed to start within 60 seconds"
-                echo "📋 Application logs:"
-                cat app.log
-                exit 1
-              fi
-              echo "⏳ Waiting... ($i/60)"
-              sleep 1
             fi
+            if [ $i -eq 60 ]; then
+              echo "❌ App didn't start"
+              cat app.log || true
+              exit 1
+            fi
+            sleep 1
           done
-      
+
       - name: Test local endpoints
         run: |
           echo "🧪 Testing local endpoints..."
-          
-          # Test root endpoint
-          echo "Testing http://localhost:8080/"
-          curl -v http://localhost:8080/ || echo "Root endpoint not available"
-          
-          # Test health endpoint
-          echo "Testing http://localhost:8080/actuator/health"
-          curl -v http://localhost:8080/actuator/health || echo "Health endpoint not available"
-          
-          # Test any custom /api endpoint
-          echo "Testing http://localhost:8080/api"
-          curl -v http://localhost:8080/api || echo "API endpoint not available"
-          
-          echo "📋 Application logs so far:"
-          cat app.log
-      
-      - name: Create Pinggy tunnel
+          curl -v http://localhost:8080/ || true
+          curl -v http://localhost:8080/actuator/health || true
+          curl -v http://localhost:8080/api || true
+          tail -n 200 app.log || true
+
+      - name: Create Pinggy tunnel (with CORS headers)
+        id: pinggy
         run: |
-          echo "🌐 Creating Pinggy tunnel..."
-          ssh -p 443 \
-              -o StrictHostKeyChecking=no \
-              -o UserKnownHostsFile=/dev/null \
-              -o ServerAliveInterval=30 \
-              -R0:localhost:8080 a.pinggy.io &
-          
-          TUNNEL_PID=$!
-          echo "🆔 Tunnel PID: $TUNNEL_PID"
-          echo $TUNNEL_PID > tunnel.pid
-          
-          sleep 10
-          echo "✅ Tunnel created! Check logs above for public URL"
-      
+          set -e
+          echo "🌐 Creating Pinggy tunnel (backgrounded, logging to pinggy.log)..."
+
+          nohup ssh -p 443 \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=30 \
+            -t -R 0:127.0.0.1:8080 a.pinggy.io \
+            'u:Access-Control-Allow-Origin:http://127.0.0.1:5500' \
+            'u:Access-Control-Allow-Methods:GET,POST,PUT,PATCH,DELETE,OPTIONS' \
+            'u:Access-Control-Allow-Headers:Content-Type,Authorization,X-Requested-With,Accept,Origin' \
+            'a:Access-Control-Max-Age:86400' \
+            > pinggy.log 2>&1 &
+
+          echo $! > pinggy.pid
+          sleep 5
+
+          echo "---- pinggy.log (tail) ----"
+          tail -n +1 pinggy.log | sed -n '1,200p' || true
+
+          # Try to auto-detect an HTTPS/Pinggy URL in the log
+          PINGGY_URL=$(grep -Eo 'https?://[^ ]*pinggy[^ ]*' pinggy.log | head -1 || true)
+
+          if [ -n "$PINGGY_URL" ]; then
+            echo "✅ Detected Pinggy public URL: $PINGGY_URL"
+            echo "pinggy_url=$PINGGY_URL" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ Could not auto-detect Pinggy URL. Check pinggy.log for details."
+          fi
+
       - name: Keep workflow alive and monitor
         run: |
           echo "🕐 Keeping workflow alive for 10 minutes..."
-          echo "🔗 Your Spring Boot app should be accessible via the Pinggy URL above"
-          
           for i in {1..20}; do
             echo "⏳ $((i*30)) seconds elapsed..."
-            
-            # Show recent app logs
-            if [ -f app.log ]; then
-              echo "📋 Recent application logs:"
-              tail -5 app.log
-            fi
-            
-            # Check if app is still running
+            if [ -f app.log ]; then tail -5 app.log; fi
+            if [ -f pinggy.log ]; then tail -5 pinggy.log; fi
             if [ -f app.pid ]; then
               APP_PID=$(cat app.pid)
-              if ps -p $APP_PID > /dev/null 2>&1; then
-                echo "✅ App process still running (PID: $APP_PID)"
-              else
-                echo "⚠️ App process not found"
-              fi
+              if ps -p $APP_PID >/dev/null 2>&1; then echo "✅ App running (PID $APP_PID)"; else echo "⚠️ App not running"; fi
             fi
-            
-            # Test local connectivity
-            if curl -s http://localhost:8080 > /dev/null 2>&1; then
-              echo "✅ App still responding locally"
-            else
-              echo "⚠️ App not responding locally"
-            fi
-            
             sleep 30
           done
-          
           echo "✅ Workflow completed"
