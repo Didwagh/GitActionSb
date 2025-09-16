@@ -12,7 +12,7 @@ public class Controller {
     public String api() {
         return "Hello World and this is coming from srpingboot project" ;
     }
-    @GetMapping(/)
+    @GetMapping("/")
     public String emptyApi() {
         return " empty api Hello World and this is coming from srpingboot project" ;
     }
