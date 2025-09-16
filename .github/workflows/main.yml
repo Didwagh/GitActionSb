@@ -1,4 +1,4 @@
-name: Deploy Spring Boot to Pinggy
+name: Deploy Spring Boot Gradle to Pinggy
 on: 
   push:
     branches: [ main, master ]
@@ -17,47 +17,55 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
       
-      - name: Cache Maven dependencies
+      - name: Cache Gradle dependencies
         uses: actions/cache@v4
         with:
-          path: ~/.m2
-          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
-          restore-keys: ${{ runner.os }}-maven-
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
       
       - name: Verify project structure
         run: |
           echo "🔍 Checking project structure..."
           ls -la
-          echo "📁 Looking for pom.xml files:"
-          find . -name "pom.xml" -type f
+          echo "📁 Looking for build.gradle files:"
+          find . -name "build.gradle" -type f
           
-          if [ ! -f "pom.xml" ]; then
-            echo "❌ No pom.xml found in root directory"
+          if [ ! -f "build.gradle" ]; then
+            echo "❌ No build.gradle found in root directory"
             echo "Please ensure your Spring Boot project is in the repository root"
-            echo "Or modify the action to cd into the correct directory"
             exit 1
           fi
           
-          echo "✅ pom.xml found, checking if it's a Spring Boot project..."
-          if grep -q "spring-boot" pom.xml; then
+          echo "✅ build.gradle found, checking if it's a Spring Boot project..."
+          if grep -q "spring-boot" build.gradle; then
             echo "✅ Spring Boot dependencies found"
           else
-            echo "⚠️  Warning: No Spring Boot dependencies detected in pom.xml"
+            echo "⚠️  Warning: No Spring Boot dependencies detected in build.gradle"
           fi
+          
+          echo "📁 Source structure:"
+          find src -type f -name "*.java" | head -10
       
-      - name: Build with Maven
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+      
+      - name: Build with Gradle
         run: |
           echo "🏗️ Building Spring Boot application..."
-          mvn clean package -DskipTests -B -V
+          ./gradlew clean build -x test --no-daemon
           
           echo "📦 Checking build output..."
-          ls -la target/
+          ls -la build/libs/
           
-          if ls target/*.jar 1> /dev/null 2>&1; then
+          if ls build/libs/*.jar 1> /dev/null 2>&1; then
             echo "✅ JAR file built successfully:"
-            ls -la target/*.jar
+            ls -la build/libs/*.jar
           else
-            echo "❌ No JAR file found in target directory"
+            echo "❌ No JAR file found in build/libs directory"
             exit 1
           fi
       
@@ -65,11 +73,13 @@ jobs:
         run: |
           echo "🚀 Starting Spring Boot application..."
           
-          # Find the JAR file (exclude original and plain JARs)
-          JAR_FILE=$(find target -name "*.jar" -not -name "*-original.jar" -not -name "*-plain.jar" | head -1)
+          # Find the JAR file (exclude plain JARs)
+          JAR_FILE=$(find build/libs -name "*.jar" -not -name "*-plain.jar" | head -1)
           
           if [ -z "$JAR_FILE" ]; then
             echo "❌ No executable JAR found"
+            echo "Available files in build/libs:"
+            ls -la build/libs/
             exit 1
           fi
           
@@ -79,6 +89,7 @@ jobs:
           nohup java -jar "$JAR_FILE" > app.log 2>&1 &
           APP_PID=$!
           echo "🆔 Application PID: $APP_PID"
+          echo $APP_PID > app.pid
           
           # Wait for application to start
           echo "⏳ Waiting for application to start..."
@@ -116,37 +127,55 @@ jobs:
           # Test any custom /api endpoint
           echo "Testing http://localhost:8080/api"
           curl -v http://localhost:8080/api || echo "API endpoint not available"
+          
+          echo "📋 Application logs so far:"
+          cat app.log
       
       - name: Create Pinggy tunnel
         run: |
           echo "🌐 Creating Pinggy tunnel..."
           ssh -p 443 \
               -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
               -o ServerAliveInterval=30 \
               -R0:localhost:8080 a.pinggy.io &
           
-          sleep 5
+          TUNNEL_PID=$!
+          echo "🆔 Tunnel PID: $TUNNEL_PID"
+          echo $TUNNEL_PID > tunnel.pid
+          
+          sleep 10
           echo "✅ Tunnel created! Check logs above for public URL"
       
       - name: Keep workflow alive and monitor
         run: |
-          echo "🕐 Keeping workflow alive for 5 minutes..."
+          echo "🕐 Keeping workflow alive for 10 minutes..."
           echo "🔗 Your Spring Boot app should be accessible via the Pinggy URL above"
           
-          for i in {1..10}; do
+          for i in {1..20}; do
             echo "⏳ $((i*30)) seconds elapsed..."
             
             # Show recent app logs
             if [ -f app.log ]; then
               echo "📋 Recent application logs:"
-              tail -10 app.log
+              tail -5 app.log
             fi
             
             # Check if app is still running
-            if curl -s http://localhost:8080/actuator/health > /dev/null 2>&1; then
-              echo "✅ App still healthy"
+            if [ -f app.pid ]; then
+              APP_PID=$(cat app.pid)
+              if ps -p $APP_PID > /dev/null 2>&1; then
+                echo "✅ App process still running (PID: $APP_PID)"
+              else
+                echo "⚠️ App process not found"
+              fi
+            fi
+            
+            # Test local connectivity
+            if curl -s http://localhost:8080 > /dev/null 2>&1; then
+              echo "✅ App still responding locally"
             else
-              echo "⚠️ App health check failed"
+              echo "⚠️ App not responding locally"
             fi
             
             sleep 30
