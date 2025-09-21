@@ -1,4 +1,4 @@
-name: Start Minikube in Codespace
+name: Start Minikube in Codespace and making port public
 
 on:
   push:
