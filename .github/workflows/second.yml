@@ -1,0 +1,39 @@
+name: Start Minikube in Codespace
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  start-minikube:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Authenticate with GitHub CLI
+      run: |
+        echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+    
+    - name: Get or Create Codespace
+      run: |
+        # Get existing codespace or create new one
+        CODESPACE_NAME=$(gh codespace list --json name --jq '.[0].name // empty')
+        
+        if [ -z "$CODESPACE_NAME" ]; then
+          echo "Creating new codespace..."
+          gh codespace create --repo ${{ github.repository }}
+          sleep 30
+          CODESPACE_NAME=$(gh codespace list --json name --jq '.[0].name')
+        fi
+        
+        echo "CODESPACE_NAME=$CODESPACE_NAME" >> $GITHUB_ENV
+        echo "Using codespace: $CODESPACE_NAME"
+    
+    - name: Start Minikube
+      run: |
+        gh codespace ssh --codespace ${{ env.CODESPACE_NAME }} -- bash -c "
+          echo 'Starting minikube...'
+          minikube start --driver=docker
+          echo 'Minikube status:'
+          minikube status
+        "
