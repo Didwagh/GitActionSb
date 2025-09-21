@@ -12,7 +12,10 @@ jobs:
     steps:
     - name: Authenticate with GitHub CLI
       run: |
-        echo "${{ secrets.GH_GITHUB_TOKEN }}" | gh auth login --with-token
+        echo "${{ secrets.GH_TOKEN }}" | gh auth login --with-token
+        gh auth status
+        echo "Testing codespace access..."
+        gh codespace list || echo "Codespace access test completed"
     
     - name: Get or Create Codespace
       run: |
@@ -36,4 +39,19 @@ jobs:
           minikube start --driver=docker
           echo 'Minikube status:'
           minikube status
+          
+          # Start port-forward in background
+          echo 'Starting port-forward for hello-app-service...'
+          nohup kubectl port-forward service/hello-app-service 8080:80 --address=0.0.0.0 > /dev/null 2>&1 &
         "
+        
+        # Make the port public using GitHub CLI
+        echo 'Making port 8080 public...'
+        gh codespace ports visibility 8080:public --codespace ${{ env.CODESPACE_NAME }}
+        
+        # Get the public URL
+        echo 'Getting public URL...'
+        gh codespace ports --codespace ${{ env.CODESPACE_NAME }}
+        
+        echo 'Sleeping for 5 minutes to keep everything running...'
+        sleep 300
