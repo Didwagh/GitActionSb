@@ -29,84 +29,21 @@ jobs:
         echo "CODESPACE_NAME=$CODESPACE_NAME" >> $GITHUB_ENV
         echo "Using codespace: $CODESPACE_NAME"
     
-    - name: Start Minikube and Deploy Service
+    - name: Start Minikube
       run: |
         gh codespace ssh --codespace ${{ env.CODESPACE_NAME }} -- bash -c "
           echo 'Starting minikube...'
           minikube start --driver=docker
-          
-          echo 'Waiting for minikube to be ready...'
-          kubectl wait --for=condition=Ready nodes --all --timeout=300s
-          
           echo 'Minikube status:'
           minikube status
-          
-          echo 'Checking if hello-app-service exists...'
-          if ! kubectl get service hello-app-service > /dev/null 2>&1; then
-            echo 'Service hello-app-service not found. You may need to deploy your application first.'
-            echo 'Available services:'
-            kubectl get services --all-namespaces
-          else
-            echo 'Service hello-app-service found'
-            kubectl get service hello-app-service
-          fi
+          echo 'Starting port-forward for hello-app-service...'
+          nohup kubectl port-forward service/hello-app-service 8080:80 --address=0.0.0.0 > /dev/null 2>&1 &
+          echo "sleeping 20sec"
+          sleep 20
         "
-    
-    - name: Setup Port Forward
-      run: |
-        echo 'Setting up port-forward for hello-app-service...'
-        gh codespace ssh --codespace ${{ env.CODESPACE_NAME }} -- bash -c "
-          # Kill any existing port-forwards on 8080
-          pkill -f 'kubectl port-forward.*8080' || true
-          
-          # Start port-forward in background
-          nohup kubectl port-forward service/hello-app-service 8080:80 --address=0.0.0.0 > port-forward.log 2>&1 &
-          PORT_FORWARD_PID=\$!
-          echo \"Port-forward started with PID: \$PORT_FORWARD_PID\"
-          
-          # Wait a bit for port-forward to establish
-          sleep 10
-          
-          # Check if port-forward is working
-          if ps -p \$PORT_FORWARD_PID > /dev/null; then
-            echo 'Port-forward is running'
-            # Test local connection
-            curl -s http://localhost:8080 > /dev/null && echo 'Local connection successful' || echo 'Local connection failed'
-          else
-            echo 'Port-forward failed to start'
-            cat port-forward.log
-            exit 1
-          fi
-        "
-    
-    - name: Make Port Public
-      run: |
         echo 'Making port 8080 public...'
-        # Wait a bit more to ensure the port is fully established
-        sleep 5
-        
-        # Try to make port public with error handling
-        if gh codespace ports visibility 8080:public --codespace ${{ env.CODESPACE_NAME }}; then
-          echo 'Successfully made port 8080 public'
-        else
-          echo 'Failed to make port public, checking available ports...'
-          gh codespace ports --codespace ${{ env.CODESPACE_NAME }} || true
-          
-          # Try to forward the port from the codespace side first
-          gh codespace ssh --codespace ${{ env.CODESPACE_NAME }} -- bash -c "
-            echo 'Checking if port 8080 is listening...'
-            netstat -tlnp | grep :8080 || ss -tlnp | grep :8080
-          "
-          exit 1
-        fi
-    
-    - name: Get Public URL and Keep Running
-      run: |
+        gh codespace ports visibility 8080:public --codespace ${{ env.CODESPACE_NAME }}
         echo 'Getting public URL...'
         gh codespace ports --codespace ${{ env.CODESPACE_NAME }}
-        
-        echo 'Port-forward logs:'
-        gh codespace ssh --codespace ${{ env.CODESPACE_NAME }} -- cat port-forward.log || true
-        
         echo 'Sleeping for 5 minutes to keep everything running...'
         sleep 300
