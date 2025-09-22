@@ -31,14 +31,16 @@ jobs:
     
     - name: Start Minikube
       run: |
-        gh codespace ssh --codespace ${{ env.CODESPACE_NAME }} -- bash -c "
+        gh codespace ssh --codespace congenial-funicular-5gg6p454rxxxcpxrg -- bash -c "
           echo 'Starting minikube...'
           minikube start --driver=docker
           echo 'Minikube status:'
           minikube status
+          # Make sure your hello-app-service is actually deployed
+          kubectl get services
           echo 'Starting port-forward for hello-app-service...'
           nohup kubectl port-forward service/hello-app-service 8080:80 --address=0.0.0.0 > /dev/null 2>&1 &
-          echo "sleeping 20sec"
+          echo 'sleeping 20sec'
           sleep 20
         "
         echo 'Making port 8080 public...'
