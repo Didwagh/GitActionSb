@@ -40,12 +40,10 @@ jobs:
           kubectl get services
           echo 'Starting port-forward for hello-app-service...'
           nohup kubectl port-forward service/hello-app-service 8080:80 --address=0.0.0.0 > /dev/null 2>&1 &
-          echo 'sleeping 20sec'
-          sleep 20
+          echo 'sleeping 10sec'
+          sleep 10
+          echo 'Making port 8080 public...'
+          gh codespace ports visibility 8080:public
         "
-        echo 'Making port 8080 public...'
-        gh codespace ports visibility 8080:public --codespace ${{ env.CODESPACE_NAME }}
-        echo 'Getting public URL...'
-        gh codespace ports --codespace ${{ env.CODESPACE_NAME }}
         echo 'Sleeping for 5 minutes to keep everything running...'
         sleep 300
