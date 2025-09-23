@@ -43,6 +43,7 @@ jobs:
           echo 'sleeping 10sec'
           sleep 10
           echo 'Making port 8080 public...'
+          echo "${{ secrets.GH_GITHUB_TOKEN }}" | gh auth login --with-token
           gh codespace ports visibility 8080:public
         "
         echo 'Sleeping for 5 minutes to keep everything running...'
